@@ -1,0 +1,9 @@
+# Ambiente virtual Python
+.venv/
+
+# Arquivos temporarios do Python
+__pycache__/
+*.pyc
+
+# Configuracoes locais do VS Code
+.vscode/
