@@ -9,6 +9,12 @@ import matplotlib.pyplot as plt
 from scipy import signal, special, integrate
 from scipy.io import wavfile
 
+from topico3 import (
+    demodular_discriminador,
+    medir_erro,
+    comparar_mensagens
+)
+
 
 # ==========================================
 # PARAMETROS DA SIMULACAO
@@ -191,7 +197,7 @@ def main():
     parser.add_argument(
         "--audio",
         type=Path,
-        default=Path("audio_teste.wav")
+        default=Path("audio.wav")
     )
 
     parser.add_argument(
@@ -206,6 +212,7 @@ def main():
 
     linhas = []
     bessel = []
+    erros_demodulacao = []
 
     # ======================================
     # 1. TOM PURO: FFT E BESSEL
@@ -329,6 +336,63 @@ def main():
         ax.legend()
 
     salvar(fig, pasta, "01_tom_bessel.png")
+
+
+    # ======================================
+    # TOPICO 3: DEMODULACAO DO TOM SEM RUIDO
+    # ======================================
+
+    fig, axs = plt.subplots(
+        len(BETAS),
+        2,
+        figsize=(13, 12),
+        squeeze=False,
+        constrained_layout=True
+    )
+
+    fig.suptitle(
+        "Discriminador FM: recuperacao do tom sem ruido",
+        fontsize=15
+    )
+
+    # Exibe 2 ms longe dos transitorios das bordas
+    inicio_tom = int(0.1 * FS)
+    fim_tom = inicio_tom + int(0.002 * FS)
+
+    tempo_tom_ms = (
+        t[inicio_tom:fim_tom] - t[inicio_tom]
+    ) * 1000
+
+    for indice, beta in enumerate(BETAS):
+
+        sinal_fm = modular_tom(t, beta)
+
+        mensagem_recuperada = demodular_discriminador(
+            sinal_fm, FS, FC, beta * FM, FM
+        )
+
+        rmse, erro_relativo = medir_erro(
+            m, mensagem_recuperada
+        )
+
+        erros_demodulacao.append([
+            "tom", beta, rmse, erro_relativo
+        ])
+
+        comparar_mensagens(
+            tempo_tom_ms,
+            m[inicio_tom:fim_tom],
+            mensagem_recuperada[inicio_tom:fim_tom],
+            axs[indice]
+        )
+
+        axs[indice, 0].set_title(f"Tom: beta = {beta}")
+        axs[indice, 1].set_title(f"RMSE: {rmse:.2e}")
+
+        # Tom periodico: derivada espectral e filtro ideal preservam a amplitude
+        assert erro_relativo < 0.01, "Erro excessivo na demodulacao do tom"
+
+    salvar(fig, pasta, "06_demodulacao_tom.png")
 
 
     # ======================================
@@ -705,6 +769,79 @@ def main():
 
         salvar(fig, pasta, "05_audio_original.png")
 
+
+        # ==================================
+        # TOPICO 3: DEMODULACAO DO AUDIO SEM RUIDO
+        # ==================================
+
+        fig, axs = plt.subplots(
+            len(BETAS_AUDIO),
+            2,
+            figsize=(14, 8),
+            squeeze=False,
+            constrained_layout=True
+        )
+
+        fig.suptitle(
+            "Discriminador FM: recuperacao do audio sem ruido",
+            fontsize=15
+        )
+
+        # Salva os mesmos 90% centrais usados na medicao do erro
+        margem_audio = max(1, int(0.05 * len(m)))
+        mensagem_referencia = m[margem_audio:-margem_audio]
+
+        wavfile.write(
+            pasta / "audio_referencia.wav",
+            FS,
+            (mensagem_referencia * 32767).astype(np.int16)
+        )
+
+        for indice, beta in enumerate(BETAS_AUDIO):
+
+            sinal_fm = modular_audio(t, integral, beta)
+
+            mensagem_recuperada = demodular_discriminador(
+                sinal_fm, FS, FC, beta * B_AUDIO, B_AUDIO
+            )
+
+            rmse, erro_relativo = medir_erro(
+                m, mensagem_recuperada
+            )
+
+            erros_demodulacao.append([
+                "audio", beta, rmse, erro_relativo
+            ])
+
+            comparar_mensagens(
+                tempo_ms,
+                m[inicio:fim],
+                mensagem_recuperada[inicio:fim],
+                axs[indice]
+            )
+
+            axs[indice, 0].set_title(f"Audio: beta = {beta}")
+            axs[indice, 1].set_title(
+                f"RMSE: {rmse:.2e} | Erro relativo: {erro_relativo:.2f}%"
+            )
+
+            audio_recuperado = mensagem_recuperada[
+                margem_audio:-margem_audio
+            ]
+
+            # Mantem o ganho original; limita apenas para a conversao em PCM
+            audio_recuperado = np.clip(audio_recuperado, -1, 1)
+
+            nome_beta = str(beta).replace(".", "_")
+
+            wavfile.write(
+                pasta / f"audio_recuperado_beta_{nome_beta}.wav",
+                FS,
+                (audio_recuperado * 32767).astype(np.int16)
+            )
+
+        salvar(fig, pasta, "07_demodulacao_audio.png")
+
     else:
 
         print(
@@ -733,6 +870,17 @@ def main():
                 "erro_percentual"
             ],
             linhas
+        ),
+
+        (
+            "demodulacao.csv",
+            [
+                "sinal",
+                "beta",
+                "rmse",
+                "erro_relativo_percentual"
+            ],
+            erros_demodulacao
         ),
 
         (
@@ -786,6 +934,15 @@ def main():
             )
 
     print("=" * 65)
+
+    print("\nTOPICO 3: ERRO DA DEMODULACAO SEM RUIDO")
+    print("Medicao nos 90% centrais, sem ajuste de ganho.")
+
+    for tipo, beta, rmse, erro_relativo in erros_demodulacao:
+        print(
+            f"{tipo:5s} | beta={beta:4g} | "
+            f"RMSE={rmse:.3e} | Erro relativo={erro_relativo:.4f}%"
+        )
 
     print(
         "\nResultados salvos em:",
